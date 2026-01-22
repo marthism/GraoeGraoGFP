@@ -1,0 +1,77 @@
+export type TransactionType = 'income' | 'expense';
+export type PaymentMethod = 'cash' | 'credit';
+export type TransactionStatus = 'paid' | 'pending';
+
+export interface Transaction {
+  id: string;
+  type: TransactionType;
+  paymentMethod: PaymentMethod;
+  amount: number; // in cents to avoid floating point issues
+  category: string;
+  description: string;
+  transactionDate: string; // ISO date - data real da compra/recebimento
+  competenceMonth: string; // YYYY-MM - mês de referência contábil
+  status: TransactionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Installment {
+  id: string;
+  transactionId: string;
+  installmentNumber: number;
+  totalInstallments: number;
+  amount: number; // in cents
+  dueMonth: string; // YYYY-MM
+  status: TransactionStatus;
+  invoiceId?: string;
+}
+
+export interface CreditCardInvoice {
+  id: string;
+  month: string; // YYYY-MM
+  dueDate: string; // ISO date
+  totalAmount: number; // in cents
+  status: TransactionStatus;
+  installmentIds: string[];
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  type: TransactionType;
+  color: string;
+  icon?: string;
+}
+
+export interface MonthlyBudget {
+  id: string;
+  categoryId: string;
+  month: string; // YYYY-MM
+  budgetAmount: number; // in cents
+}
+
+export interface FinancialSummary {
+  currentBalance: number; // only paid/received
+  projectedBalance: number; // current + pending
+  pendingIncome: number;
+  pendingExpenses: number;
+  pendingInvoices: number;
+}
+
+// Default categories
+export const DEFAULT_CATEGORIES: Category[] = [
+  { id: 'salary', name: 'Salário', type: 'income', color: 'hsl(155, 70%, 35%)' },
+  { id: 'freelance', name: 'Freelance', type: 'income', color: 'hsl(175, 70%, 35%)' },
+  { id: 'investments', name: 'Investimentos', type: 'income', color: 'hsl(200, 70%, 35%)' },
+  { id: 'other-income', name: 'Outras Receitas', type: 'income', color: 'hsl(130, 60%, 40%)' },
+  { id: 'food', name: 'Alimentação', type: 'expense', color: 'hsl(30, 70%, 50%)' },
+  { id: 'transport', name: 'Transporte', type: 'expense', color: 'hsl(200, 60%, 50%)' },
+  { id: 'housing', name: 'Moradia', type: 'expense', color: 'hsl(260, 50%, 55%)' },
+  { id: 'health', name: 'Saúde', type: 'expense', color: 'hsl(0, 60%, 50%)' },
+  { id: 'education', name: 'Educação', type: 'expense', color: 'hsl(45, 70%, 50%)' },
+  { id: 'entertainment', name: 'Lazer', type: 'expense', color: 'hsl(320, 60%, 55%)' },
+  { id: 'shopping', name: 'Compras', type: 'expense', color: 'hsl(280, 55%, 55%)' },
+  { id: 'bills', name: 'Contas Fixas', type: 'expense', color: 'hsl(220, 50%, 50%)' },
+  { id: 'other-expense', name: 'Outras Despesas', type: 'expense', color: 'hsl(0, 0%, 50%)' },
+];
