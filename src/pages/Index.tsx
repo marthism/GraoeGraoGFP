@@ -157,7 +157,7 @@ const Index = () => {
           </TabsContent>
 
           <TabsContent value="invoices" className="animate-fade-in">
-            <InvoiceList invoices={invoices} installments={installments} transactions={transactions} categories={categories} onPayInvoice={payInvoice} creditCards={creditCards} />
+            <InvoiceList invoices={invoices} installments={installments} transactions={transactions} categories={categories} onPayInvoice={payInvoice} />
           </TabsContent>
 
           <TabsContent value="budget" className="animate-fade-in">

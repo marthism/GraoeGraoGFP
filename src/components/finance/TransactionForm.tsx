@@ -241,7 +241,7 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
           {installmentPreview && (
             <div className="p-3 rounded-lg bg-credit-light border border-credit/20 space-y-2">
               <p className="text-sm font-medium text-credit flex items-center gap-2">
-                <CreditCard className="h-4 w-4" />
+                <CreditCardIcon className="h-4 w-4" />
                 Prévia das Parcelas
               </p>
               <div className="grid grid-cols-4 gap-2 text-xs">
