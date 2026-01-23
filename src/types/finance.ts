@@ -2,6 +2,16 @@ export type TransactionType = 'income' | 'expense';
 export type PaymentMethod = 'cash' | 'credit';
 export type TransactionStatus = 'paid' | 'pending';
 
+export interface CreditCard {
+  id: string;
+  name: string;
+  lastDigits: string;
+  color: string;
+  closingDay: number; // 1-28
+  dueDay: number; // 1-28
+  limit: number; // in cents
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
@@ -12,6 +22,7 @@ export interface Transaction {
   transactionDate: string; // ISO date - data real da compra/recebimento
   competenceMonth: string; // YYYY-MM - mês de referência contábil
   status: TransactionStatus;
+  creditCardId?: string; // Reference to credit card if payment method is credit
   createdAt: string;
   updatedAt: string;
 }
@@ -25,10 +36,12 @@ export interface Installment {
   dueMonth: string; // YYYY-MM
   status: TransactionStatus;
   invoiceId?: string;
+  creditCardId?: string;
 }
 
 export interface CreditCardInvoice {
   id: string;
+  creditCardId: string;
   month: string; // YYYY-MM
   dueDate: string; // ISO date
   totalAmount: number; // in cents
@@ -51,6 +64,11 @@ export interface MonthlyBudget {
   budgetAmount: number; // in cents
 }
 
+export interface UserSettings {
+  userName: string;
+  theme: 'light' | 'dark' | 'system';
+}
+
 export interface FinancialSummary {
   currentBalance: number; // only paid/received
   projectedBalance: number; // current + pending
@@ -58,6 +76,19 @@ export interface FinancialSummary {
   pendingExpenses: number;
   pendingInvoices: number;
 }
+
+// Default credit card
+export const DEFAULT_CREDIT_CARDS: CreditCard[] = [
+  { 
+    id: 'nubank', 
+    name: 'Nubank', 
+    lastDigits: '1234', 
+    color: 'hsl(280, 100%, 60%)', 
+    closingDay: 3, 
+    dueDay: 10, 
+    limit: 500000 // R$ 5.000,00
+  },
+];
 
 // Default categories
 export const DEFAULT_CATEGORIES: Category[] = [
@@ -75,3 +106,8 @@ export const DEFAULT_CATEGORIES: Category[] = [
   { id: 'bills', name: 'Contas Fixas', type: 'expense', color: 'hsl(220, 50%, 50%)' },
   { id: 'other-expense', name: 'Outras Despesas', type: 'expense', color: 'hsl(0, 0%, 50%)' },
 ];
+
+export const DEFAULT_USER_SETTINGS: UserSettings = {
+  userName: 'Usuário',
+  theme: 'dark',
+};

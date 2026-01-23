@@ -5,11 +5,15 @@ import {
   CreditCardInvoice, 
   Category, 
   MonthlyBudget,
+  CreditCard,
+  UserSettings,
   DEFAULT_CATEGORIES,
+  DEFAULT_CREDIT_CARDS,
+  DEFAULT_USER_SETTINGS,
   TransactionStatus 
 } from '@/types/finance';
 import { generateId, calculateInstallments, getCurrentMonth } from '@/lib/finance-utils';
-import { format, addMonths } from 'date-fns';
+import { format } from 'date-fns';
 
 interface FinanceState {
   transactions: Transaction[];
@@ -17,6 +21,8 @@ interface FinanceState {
   invoices: CreditCardInvoice[];
   categories: Category[];
   budgets: MonthlyBudget[];
+  creditCards: CreditCard[];
+  userSettings: UserSettings;
 }
 
 const STORAGE_KEY = 'finance-manager-data';
@@ -27,6 +33,8 @@ const initialState: FinanceState = {
   invoices: [],
   categories: DEFAULT_CATEGORIES,
   budgets: [],
+  creditCards: DEFAULT_CREDIT_CARDS,
+  userSettings: DEFAULT_USER_SETTINGS,
 };
 
 function loadFromStorage(): FinanceState {
@@ -38,6 +46,8 @@ function loadFromStorage(): FinanceState {
         ...initialState,
         ...parsed,
         categories: parsed.categories?.length > 0 ? parsed.categories : DEFAULT_CATEGORIES,
+        creditCards: parsed.creditCards?.length > 0 ? parsed.creditCards : DEFAULT_CREDIT_CARDS,
+        userSettings: parsed.userSettings || DEFAULT_USER_SETTINGS,
       };
     }
   } catch (error) {
@@ -62,6 +72,24 @@ export function useFinanceStore() {
     saveToStorage(state);
   }, [state]);
 
+  // Apply theme
+  useEffect(() => {
+    const theme = state.userSettings.theme;
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      // System preference
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (prefersDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  }, [state.userSettings.theme]);
+
   // Add a new transaction
   const addTransaction = useCallback((
     data: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>,
@@ -81,6 +109,11 @@ export function useFinanceStore() {
       let newInstallments = [...prev.installments];
       let newInvoices = [...prev.invoices];
 
+      // Get credit card for due date calculation
+      const creditCard = data.creditCardId 
+        ? prev.creditCards.find(c => c.id === data.creditCardId)
+        : prev.creditCards[0];
+
       // Handle credit card installments
       if (data.paymentMethod === 'credit' && installmentCount && installmentCount > 1) {
         const { amounts, months } = calculateInstallments(
@@ -97,13 +130,16 @@ export function useFinanceStore() {
           amount,
           dueMonth: months[index],
           status: 'pending' as TransactionStatus,
+          creditCardId: data.creditCardId || prev.creditCards[0]?.id,
         }));
 
         newInstallments = [...newInstallments, ...installments];
 
         // Group installments into invoices
         installments.forEach(inst => {
-          const existingInvoice = newInvoices.find(inv => inv.month === inst.dueMonth);
+          const existingInvoice = newInvoices.find(
+            inv => inv.month === inst.dueMonth && inv.creditCardId === inst.creditCardId
+          );
           
           if (existingInvoice) {
             existingInvoice.installmentIds.push(inst.id);
@@ -111,10 +147,12 @@ export function useFinanceStore() {
           } else {
             // Create new invoice for this month
             const [year, month] = inst.dueMonth.split('-').map(Number);
-            const dueDate = new Date(year, month - 1, 10); // Due on day 10
+            const dueDay = creditCard?.dueDay || 10;
+            const dueDate = new Date(year, month - 1, dueDay);
             
             newInvoices.push({
               id: generateId(),
+              creditCardId: inst.creditCardId || prev.creditCards[0]?.id,
               month: inst.dueMonth,
               dueDate: format(dueDate, 'yyyy-MM-dd'),
               totalAmount: inst.amount,
@@ -126,7 +164,10 @@ export function useFinanceStore() {
       } else if (data.paymentMethod === 'credit') {
         // Single credit purchase
         const dueMonth = data.competenceMonth;
-        const existingInvoice = newInvoices.find(inv => inv.month === dueMonth);
+        const cardId = data.creditCardId || prev.creditCards[0]?.id;
+        const existingInvoice = newInvoices.find(
+          inv => inv.month === dueMonth && inv.creditCardId === cardId
+        );
         
         const installment: Installment = {
           id: generateId(),
@@ -136,6 +177,7 @@ export function useFinanceStore() {
           amount: data.amount,
           dueMonth,
           status: 'pending',
+          creditCardId: cardId,
         };
         
         newInstallments.push(installment);
@@ -145,10 +187,12 @@ export function useFinanceStore() {
           existingInvoice.totalAmount += installment.amount;
         } else {
           const [year, month] = dueMonth.split('-').map(Number);
-          const dueDate = new Date(year, month - 1, 10);
+          const dueDay = creditCard?.dueDay || 10;
+          const dueDate = new Date(year, month - 1, dueDay);
           
           newInvoices.push({
             id: generateId(),
+            creditCardId: cardId,
             month: dueMonth,
             dueDate: format(dueDate, 'yyyy-MM-dd'),
             totalAmount: installment.amount,
@@ -292,12 +336,62 @@ export function useFinanceStore() {
     return newCategory.id;
   }, []);
 
+  // Credit Card Management
+  const addCreditCard = useCallback((card: Omit<CreditCard, 'id'>) => {
+    const newCard = { ...card, id: generateId() };
+    setState(prev => ({
+      ...prev,
+      creditCards: [...prev.creditCards, newCard],
+    }));
+    return newCard.id;
+  }, []);
+
+  const updateCreditCard = useCallback((id: string, updates: Partial<CreditCard>) => {
+    setState(prev => ({
+      ...prev,
+      creditCards: prev.creditCards.map(c =>
+        c.id === id ? { ...c, ...updates } : c
+      ),
+    }));
+  }, []);
+
+  const deleteCreditCard = useCallback((id: string) => {
+    setState(prev => ({
+      ...prev,
+      creditCards: prev.creditCards.filter(c => c.id !== id),
+    }));
+  }, []);
+
+  // User Settings
+  const updateUserSettings = useCallback((updates: Partial<UserSettings>) => {
+    setState(prev => ({
+      ...prev,
+      userSettings: { ...prev.userSettings, ...updates },
+    }));
+  }, []);
+
+  // Load mock data
+  const loadMockData = useCallback((mockData: Partial<FinanceState>) => {
+    setState(prev => ({
+      ...prev,
+      ...mockData,
+    }));
+  }, []);
+
+  // Clear all data
+  const clearAllData = useCallback(() => {
+    setState(initialState);
+    localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
   return {
     transactions: state.transactions,
     installments: state.installments,
     invoices: state.invoices,
     categories: state.categories,
     budgets: state.budgets,
+    creditCards: state.creditCards,
+    userSettings: state.userSettings,
     addTransaction,
     updateTransactionStatus,
     deleteTransaction,
@@ -309,5 +403,11 @@ export function useFinanceStore() {
     getInvoiceByMonth,
     getInstallmentsForInvoice,
     addCategory,
+    addCreditCard,
+    updateCreditCard,
+    deleteCreditCard,
+    updateUserSettings,
+    loadMockData,
+    clearAllData,
   };
 }

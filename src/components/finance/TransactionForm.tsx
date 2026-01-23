@@ -5,10 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Category, TransactionType, PaymentMethod, TransactionStatus } from '@/types/finance';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Category, TransactionType, PaymentMethod, TransactionStatus, CreditCard } from '@/types/finance';
 import { parseCurrencyToCents, formatCurrency, calculateInstallments, getCurrentMonth } from '@/lib/finance-utils';
-import { ArrowDownLeft, ArrowUpRight, CreditCard, Wallet, AlertCircle } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, CreditCard as CreditCardIcon, Wallet, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -16,6 +16,7 @@ interface TransactionFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   categories: Category[];
+  creditCards: CreditCard[];
   onSubmit: (data: {
     type: TransactionType;
     paymentMethod: PaymentMethod;
@@ -25,10 +26,11 @@ interface TransactionFormProps {
     transactionDate: string;
     competenceMonth: string;
     status: TransactionStatus;
+    creditCardId?: string;
   }, installments?: number) => void;
 }
 
-export function TransactionForm({ open, onOpenChange, categories, onSubmit }: TransactionFormProps) {
+export function TransactionForm({ open, onOpenChange, categories, creditCards, onSubmit }: TransactionFormProps) {
   const [type, setType] = useState<TransactionType>('expense');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [amount, setAmount] = useState('');
@@ -38,6 +40,7 @@ export function TransactionForm({ open, onOpenChange, categories, onSubmit }: Tr
   const [competenceMonth, setCompetenceMonth] = useState(getCurrentMonth());
   const [status, setStatus] = useState<TransactionStatus>('pending');
   const [installmentCount, setInstallmentCount] = useState('1');
+  const [selectedCardId, setSelectedCardId] = useState(creditCards[0]?.id || '');
 
   const filteredCategories = categories.filter(c => c.type === type);
   const amountInCents = parseCurrencyToCents(amount);
@@ -62,6 +65,7 @@ export function TransactionForm({ open, onOpenChange, categories, onSubmit }: Tr
       transactionDate,
       competenceMonth,
       status: paymentMethod === 'credit' ? 'pending' : status,
+      creditCardId: paymentMethod === 'credit' ? selectedCardId : undefined,
     }, paymentMethod === 'credit' ? numInstallments : undefined);
 
     // Reset form
@@ -83,7 +87,10 @@ export function TransactionForm({ open, onOpenChange, categories, onSubmit }: Tr
     setCompetenceMonth(getCurrentMonth());
     setStatus('pending');
     setInstallmentCount('1');
+    setSelectedCardId(creditCards[0]?.id || '');
   };
+
+  const selectedCard = creditCards.find(c => c.id === selectedCardId);
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => {
@@ -146,10 +153,44 @@ export function TransactionForm({ open, onOpenChange, categories, onSubmit }: Tr
                   )}
                 >
                   <RadioGroupItem value="credit" id="credit" />
-                  <CreditCard className="h-4 w-4" />
+                  <CreditCardIcon className="h-4 w-4" />
                   <span>Crédito</span>
                 </Label>
               </RadioGroup>
+            </div>
+          )}
+
+          {/* Credit Card Selection */}
+          {paymentMethod === 'credit' && creditCards.length > 0 && (
+            <div className="space-y-2">
+              <Label>Cartão de Crédito</Label>
+              <Select value={selectedCardId} onValueChange={setSelectedCardId}>
+                <SelectTrigger>
+                  <div className="flex items-center gap-2">
+                    {selectedCard && (
+                      <div 
+                        className="w-3 h-3 rounded-full" 
+                        style={{ backgroundColor: selectedCard.color }}
+                      />
+                    )}
+                    <SelectValue placeholder="Selecione o cartão" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  {creditCards.map(card => (
+                    <SelectItem key={card.id} value={card.id}>
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-3 h-3 rounded-full" 
+                          style={{ backgroundColor: card.color }}
+                        />
+                        <span>{card.name}</span>
+                        <span className="text-muted-foreground">•••• {card.lastDigits}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
 
