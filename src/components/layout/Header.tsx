@@ -3,9 +3,10 @@ import { Plus, Wallet } from 'lucide-react';
 
 interface HeaderProps {
   onAddTransaction: () => void;
+  userName?: string;
 }
 
-export function Header({ onAddTransaction }: HeaderProps) {
+export function Header({ onAddTransaction, userName = 'Usuário' }: HeaderProps) {
   return (
     <header className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
       <div className="container flex h-16 items-center justify-between">
@@ -15,7 +16,7 @@ export function Header({ onAddTransaction }: HeaderProps) {
           </div>
           <div>
             <h1 className="text-lg font-semibold">Gestão Financeira</h1>
-            <p className="text-xs text-muted-foreground">Controle confiável</p>
+            <p className="text-xs text-muted-foreground">Olá, {userName}</p>
           </div>
         </div>
 
