@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { CreditCard, UserSettings } from '@/types/finance';
 import { formatCurrency } from '@/lib/finance-utils';
 import { 
@@ -31,6 +32,7 @@ interface SettingsPageProps {
   onUpdateSettings: (updates: Partial<UserSettings>) => void;
   onLoadMockData: () => void;
   onClearData: () => void;
+  onResetOnboarding: () => void;
 }
 
 const CARD_COLORS = [
@@ -53,10 +55,12 @@ export function SettingsPage({
   onUpdateSettings,
   onLoadMockData,
   onClearData,
+  onResetOnboarding,
 }: SettingsPageProps) {
   const [isCardDialogOpen, setIsCardDialogOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CreditCard | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   // Card form state
   const [cardName, setCardName] = useState('');
@@ -354,6 +358,7 @@ export function SettingsPage({
               ))}
             </div>
           )}
+
         </CardContent>
       </Card>
 
@@ -415,6 +420,38 @@ export function SettingsPage({
               </div>
             </div>
           )}
+
+          <AlertDialog open={confirmReset} onOpenChange={setConfirmReset}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Resetar e voltar para apresentacao?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Isso vai apagar seus dados e reiniciar o app. Deseja continuar?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => {
+                    onResetOnboarding();
+                    setConfirmReset(false);
+                  }}
+                >
+                  Confirmar
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <Button
+            variant="outline"
+            className="w-full gap-2 border-destructive/60 text-destructive hover:text-destructive"
+            onClick={() => setConfirmReset(true)}
+          >
+            <AlertTriangle className="h-4 w-4" />
+            Resetar e voltar para apresentacao
+          </Button>
         </CardContent>
       </Card>
     </div>

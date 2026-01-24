@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    allowedHosts: ["eponymous-talkiest-marybelle.ngrok-free.dev"],
     hmr: {
       overlay: false,
     },

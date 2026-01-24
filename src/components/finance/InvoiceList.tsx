@@ -16,12 +16,44 @@ interface InvoiceListProps {
   transactions: Transaction[];
   categories: Category[];
   onPayInvoice: (invoiceId: string) => void;
+  selectedMonth: string;
 }
 
-export function InvoiceList({ invoices, installments, transactions, categories, onPayInvoice }: InvoiceListProps) {
+export function InvoiceList({ invoices, installments, transactions, categories, onPayInvoice, selectedMonth }: InvoiceListProps) {
   const [openInvoices, setOpenInvoices] = useState<string[]>([]);
 
-  const sortedInvoices = [...invoices].sort((a, b) => b.month.localeCompare(a.month));
+  // Generate 5 consecutive months starting from selectedMonth
+  const months = [];
+  for (let i = 0; i < 5; i++) {
+    const date = new Date(selectedMonth + '-01');
+    date.setMonth(date.getMonth() + i);
+    months.push(format(date, 'yyyy-MM'));
+  }
+
+  // Group invoices by month
+  const invoicesByMonth = invoices.reduce((acc, invoice) => {
+    if (!acc[invoice.month]) {
+      acc[invoice.month] = [];
+    }
+    acc[invoice.month].push(invoice);
+    return acc;
+  }, {} as Record<string, CreditCardInvoice[]>);
+
+  // Create month data
+  const monthData = months.map(month => {
+    const monthInvoices = invoicesByMonth[month] || [];
+    const totalAmount = monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+    const hasOverdue = monthInvoices.some(inv => isOverdue(inv.dueDate));
+    const allPaid = monthInvoices.length > 0 && monthInvoices.every(inv => inv.status === 'paid');
+    const status = monthInvoices.length === 0 ? 'empty' : hasOverdue ? 'overdue' : allPaid ? 'paid' : 'pending';
+
+    return {
+      month,
+      totalAmount,
+      status,
+      invoices: monthInvoices,
+    };
+  });
 
   const getCategoryName = (categoryId: string) => {
     return categories.find(c => c.id === categoryId)?.name || categoryId;
@@ -31,15 +63,15 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
     return transactions.find(t => t.id === installment.transactionId);
   };
 
-  const toggleInvoice = (invoiceId: string) => {
+  const toggleInvoice = (month: string) => {
     setOpenInvoices(prev => 
-      prev.includes(invoiceId) 
-        ? prev.filter(id => id !== invoiceId)
-        : [...prev, invoiceId]
+      prev.includes(month) 
+        ? prev.filter(m => m !== month)
+        : [...prev, month]
     );
   };
 
-  if (sortedInvoices.length === 0) {
+  if (monthData.length === 0) {
     return (
       <Card>
         <CardHeader>
@@ -50,7 +82,7 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground text-center py-8">
-            Nenhuma fatura registrada
+            Nenhuma fatura encontrada.
           </p>
         </CardContent>
       </Card>
@@ -67,18 +99,15 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
       </CardHeader>
       <CardContent className="p-0">
         <div className="divide-y">
-          {sortedInvoices.map(invoice => {
-            const overdue = invoice.status === 'pending' && isOverdue(invoice.dueDate);
-            const isOpen = openInvoices.includes(invoice.id);
-            const invoiceInstallments = installments.filter(
-              inst => invoice.installmentIds.includes(inst.id)
-            );
+          {monthData.map(({ month, totalAmount, status, invoices: monthInvoices }) => {
+            const isOpen = openInvoices.includes(month);
+            const overdue = status === 'overdue';
 
             return (
               <Collapsible 
-                key={invoice.id}
+                key={month}
                 open={isOpen}
-                onOpenChange={() => toggleInvoice(invoice.id)}
+                onOpenChange={() => toggleInvoice(month)}
               >
                 <CollapsibleTrigger asChild>
                   <div className={cn(
@@ -88,22 +117,19 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
                     <div className="flex items-center gap-4">
                       <div className={cn(
                         'p-2 rounded-lg',
-                        invoice.status === 'paid' ? 'bg-income/15 text-income' : 'bg-credit/15 text-credit'
+                        status === 'paid' ? 'bg-income/15 text-income' : status === 'empty' ? 'bg-muted text-muted-foreground' : 'bg-credit/15 text-credit'
                       )}>
                         <CreditCard className="h-4 w-4" />
                       </div>
                       
                       <div>
                         <p className="font-medium capitalize">
-                          {format(parseISO(invoice.month + '-01'), 'MMMM yyyy', { locale: ptBR })}
+                          {getMonthDisplayName(month)}
                         </p>
                         <div className="flex items-center gap-2 mt-1">
                           <Calendar className="h-3 w-3 text-muted-foreground" />
                           <span className="text-xs text-muted-foreground">
-                            Vence em {format(parseISO(invoice.dueDate), "dd/MM/yyyy")}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            • {invoiceInstallments.length} lançamentos
+                            {monthInvoices.length} faturas
                           </span>
                         </div>
                       </div>
@@ -112,18 +138,19 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
                     <div className="flex items-center gap-4">
                       <div className="text-right">
                         <p className="font-mono font-semibold text-expense">
-                          {formatCurrency(invoice.totalAmount)}
+                          {formatCurrency(totalAmount)}
                         </p>
                         <Badge 
                           variant="outline" 
                           className={cn(
                             'text-xs mt-1',
-                            invoice.status === 'paid' && 'badge-paid',
-                            invoice.status === 'pending' && !overdue && 'badge-pending',
-                            invoice.status === 'pending' && overdue && 'badge-overdue'
+                            status === 'paid' && 'badge-paid',
+                            status === 'pending' && 'badge-pending',
+                            status === 'overdue' && 'badge-overdue',
+                            status === 'empty' && 'bg-muted text-muted-foreground'
                           )}
                         >
-                          {invoice.status === 'paid' ? 'Paga' : overdue ? 'Vencida' : 'Pendente'}
+                          {status === 'paid' ? 'Paga' : status === 'overdue' ? 'Vencida' : status === 'pending' ? 'Pendente' : 'Sem faturas'}
                         </Badge>
                       </div>
 
@@ -137,48 +164,81 @@ export function InvoiceList({ invoices, installments, transactions, categories, 
 
                 <CollapsibleContent>
                   <div className="px-6 pb-4 pt-2 space-y-2 bg-muted/30">
-                    {invoiceInstallments.map(inst => {
-                      const tx = getTransactionForInstallment(inst);
-                      if (!tx) return null;
+                    {monthInvoices.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        Nenhuma fatura neste mês.
+                      </p>
+                    ) : (
+                      monthInvoices.map(invoice => {
+                        const invoiceInstallments = installments.filter(
+                          inst => invoice.installmentIds.includes(inst.id)
+                        );
 
-                      return (
-                        <div 
-                          key={inst.id}
-                          className="flex items-center justify-between p-3 rounded-lg bg-card"
-                        >
-                          <div className="flex items-center gap-3">
-                            <Receipt className="h-4 w-4 text-muted-foreground" />
-                            <div>
-                              <p className="text-sm font-medium">{tx.description}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {getCategoryName(tx.category)}
-                                {inst.totalInstallments > 1 && (
-                                  <span className="ml-1">
-                                    • Parcela {inst.installmentNumber}/{inst.totalInstallments}
-                                  </span>
-                                )}
+                        return (
+                          <div key={invoice.id} className="space-y-2">
+                            <div className="flex items-center justify-between p-3 rounded-lg bg-card">
+                              <div className="flex items-center gap-3">
+                                <CreditCard className="h-4 w-4 text-muted-foreground" />
+                                <div>
+                                  <p className="text-sm font-medium">
+                                    {invoice.creditCardId} - {format(parseISO(invoice.dueDate), "dd/MM/yyyy")}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {invoiceInstallments.length} lançamentos
+                                  </p>
+                                </div>
+                              </div>
+                              <p className="font-mono text-sm font-medium">
+                                {formatCurrency(invoice.totalAmount)}
                               </p>
                             </div>
-                          </div>
-                          <p className="font-mono text-sm font-medium">
-                            {formatCurrency(inst.amount)}
-                          </p>
-                        </div>
-                      );
-                    })}
 
-                    {invoice.status === 'pending' && (
-                      <Button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onPayInvoice(invoice.id);
-                        }}
-                        className="w-full mt-2 gap-2"
-                        variant="default"
-                      >
-                        <Check className="h-4 w-4" />
-                        Pagar Fatura
-                      </Button>
+                            {invoiceInstallments.map(inst => {
+                              const tx = getTransactionForInstallment(inst);
+                              if (!tx) return null;
+
+                              return (
+                                <div 
+                                  key={inst.id}
+                                  className="flex items-center justify-between p-3 rounded-lg bg-card ml-6"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <Receipt className="h-4 w-4 text-muted-foreground" />
+                                    <div>
+                                      <p className="text-sm font-medium">{tx.description}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {getCategoryName(tx.category)}
+                                        {inst.totalInstallments > 1 && (
+                                          <span className="ml-1">
+                                            • Parcela {inst.installmentNumber}/{inst.totalInstallments}
+                                          </span>
+                                        )}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <p className="font-mono text-sm font-medium">
+                                    {formatCurrency(inst.amount)}
+                                  </p>
+                                </div>
+                              );
+                            })}
+
+                            {invoice.status === 'pending' && (
+                              <Button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onPayInvoice(invoice.id);
+                                }}
+                                className="w-full mt-2 gap-2 ml-6"
+                                variant="default"
+                              >
+                                <Check className="h-4 w-4" />
+                                Pagar Fatura
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </CollapsibleContent>

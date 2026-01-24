@@ -1,4 +1,5 @@
-import { useState } from 'react';
+﻿
+import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,10 +7,11 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Category, TransactionType, PaymentMethod, TransactionStatus, CreditCard } from '@/types/finance';
+import { Switch } from '@/components/ui/switch';
+import { Category, TransactionType, PaymentMethod, TransactionStatus, CreditCard, Installment } from '@/types/finance';
 import { parseCurrencyToCents, formatCurrency, calculateInstallments, getCurrentMonth } from '@/lib/finance-utils';
-import { ArrowDownLeft, ArrowUpRight, CreditCard as CreditCardIcon, Wallet, AlertCircle } from 'lucide-react';
-import { format } from 'date-fns';
+import { ArrowDownLeft, ArrowUpRight, CreditCard as CreditCardIcon, Wallet, AlertCircle, ChevronRight } from 'lucide-react';
+import { addMonths, format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 interface TransactionFormProps {
@@ -17,6 +19,7 @@ interface TransactionFormProps {
   onOpenChange: (open: boolean) => void;
   categories: Category[];
   creditCards: CreditCard[];
+  installments: Installment[];
   onSubmit: (data: {
     type: TransactionType;
     paymentMethod: PaymentMethod;
@@ -30,50 +33,421 @@ interface TransactionFormProps {
   }, installments?: number) => void;
 }
 
-export function TransactionForm({ open, onOpenChange, categories, creditCards, onSubmit }: TransactionFormProps) {
+const parsePercent = (value: string): number => {
+  if (!value) return 0;
+  const cleaned = value.replace(/[^\d.,-]/g, '').replace(',', '.');
+  const parsed = parseFloat(cleaned);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const formatCentsToInput = (cents: number): string => {
+  return (cents / 100).toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatMonthLabel = (month: string): string => {
+  if (!month) return '';
+  return format(parseISO(`${month}-01`), 'MM/yyyy');
+};
+
+const getAutoCompetenceMonth = (dateStr: string, closingDay: number): string => {
+  const date = parseISO(dateStr);
+  if (Number.isNaN(date.getTime()) || !closingDay) return getCurrentMonth();
+  const closingDate = new Date(date.getFullYear(), date.getMonth(), closingDay);
+  const competenceDate = date > closingDate ? addMonths(date, 1) : date;
+  return format(competenceDate, 'yyyy-MM');
+};
+
+type ScheduleItem = { month: string; amount: number; interest: number; amortization: number; balance: number };
+
+const adjustScheduleTotal = (schedule: ScheduleItem[], targetTotalCents: number) => {
+  if (!schedule.length) return schedule;
+  const currentTotal = schedule.reduce((sum, item) => sum + item.amount, 0);
+  const diff = targetTotalCents - currentTotal;
+  if (diff !== 0) {
+    schedule[0] = {
+      ...schedule[0],
+      amount: schedule[0].amount + diff,
+      amortization: schedule[0].amortization + diff,
+    };
+  }
+  return schedule;
+};
+
+const buildPriceSchedule = (
+  capitalCents: number,
+  rate: number,
+  months: number,
+  startMonth: string,
+  penaltyCents: number,
+) => {
+  if (capitalCents <= 0 || months <= 0) return [] as ScheduleItem[];
+  const { months: monthList } = calculateInstallments(capitalCents, months, startMonth || getCurrentMonth());
+  if (rate <= 0) {
+    const { amounts } = calculateInstallments(capitalCents, months, startMonth || getCurrentMonth());
+    let balance = capitalCents;
+    return amounts.map((amt, idx) => {
+      const amortization = amt;
+      balance = Math.max(balance - amortization, 0);
+      return {
+        month: monthList[idx],
+        amount: amt + (idx === 0 ? penaltyCents : 0),
+        interest: 0,
+        amortization,
+        balance,
+      };
+    });
+  }
+
+  const factor = Math.pow(1 + rate, months);
+  const payment = Math.round(capitalCents * (rate * factor) / (factor - 1));
+  let balance = capitalCents;
+
+  return monthList.map((month, idx) => {
+    const interest = Math.round(balance * rate);
+    let amortization = payment - interest;
+    if (idx === monthList.length - 1) {
+      amortization = balance;
+    }
+    let amount = amortization + interest;
+    if (idx === 0) amount += penaltyCents;
+    balance = Math.max(balance - amortization, 0);
+    return {
+      month,
+      amount,
+      interest,
+      amortization,
+      balance,
+    };
+  });
+};
+
+const buildVariableSchedule = (
+  capitalCents: number,
+  rate: number,
+  months: number,
+  startMonth: string,
+  penaltyCents: number,
+) => {
+  if (capitalCents <= 0 || months <= 0) return [] as ScheduleItem[];
+  const { amounts, months: monthList } = calculateInstallments(capitalCents, months, startMonth || getCurrentMonth());
+  let balance = capitalCents;
+  return amounts.map((amortization, idx) => {
+    const interest = rate > 0 ? Math.round(balance * rate) : 0;
+    let amount = amortization + interest;
+    if (idx === 0) amount += penaltyCents;
+    balance = Math.max(balance - amortization, 0);
+    return {
+      month: monthList[idx],
+      amount,
+      interest,
+      amortization,
+      balance,
+    };
+  });
+};
+
+export function TransactionForm({ open, onOpenChange, categories, creditCards, installments, onSubmit }: TransactionFormProps) {
   const [type, setType] = useState<TransactionType>('expense');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [amount, setAmount] = useState('');
+  const [entryAmount, setEntryAmount] = useState('');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
-  const [transactionDate, setTransactionDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [competenceMonth, setCompetenceMonth] = useState(getCurrentMonth());
   const [status, setStatus] = useState<TransactionStatus>('pending');
   const [installmentCount, setInstallmentCount] = useState('1');
   const [selectedCardId, setSelectedCardId] = useState(creditCards[0]?.id || '');
+  const [interestMode, setInterestMode] = useState<'percent' | 'fixed'>('percent');
+  const [interestValue, setInterestValue] = useState('');
+  const [penaltyMode, setPenaltyMode] = useState<'percent' | 'fixed'>('percent');
+  const [penaltyValue, setPenaltyValue] = useState('');
+  const [compoundEnabled, setCompoundEnabled] = useState(true);
+  const [isCompoundExpanded, setIsCompoundExpanded] = useState(false);
+  const [compoundRate, setCompoundRate] = useState('');
+  const [compoundMethod, setCompoundMethod] = useState<'price' | 'variable'>('price');
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(true);
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [card2Id, setCard2Id] = useState('');
+  const [card1Amount, setCard1Amount] = useState('');
+  const [card2Amount, setCard2Amount] = useState('');
+  const [splitDirty, setSplitDirty] = useState(false);
 
   const filteredCategories = categories.filter(c => c.type === type);
   const amountInCents = parseCurrencyToCents(amount);
+  const entryInCents = parseCurrencyToCents(entryAmount);
   const numInstallments = parseInt(installmentCount) || 1;
 
-  // Preview installments for credit
-  const installmentPreview = paymentMethod === 'credit' && numInstallments > 1
-    ? calculateInstallments(amountInCents, numInstallments, competenceMonth)
-    : null;
+  const selectedCard = creditCards.find(c => c.id === selectedCardId);
+  const secondCard = creditCards.find(c => c.id === card2Id);
+  const transactionDate = format(new Date(), 'yyyy-MM-dd');
+  const competenceMonth = paymentMethod === 'credit' && selectedCard
+    ? getAutoCompetenceMonth(transactionDate, selectedCard.closingDay)
+    : getCurrentMonth();
+
+  const financedBaseCents = Math.max(amountInCents - entryInCents, 0);
+  const isEntryInvalid = amountInCents > 0 && entryInCents > amountInCents;
+
+  const compoundRatePct = parsePercent(compoundRate);
+  const compoundRateDecimal = compoundRatePct / 100;
+  const compoundRateInvalid = compoundRatePct < 0;
+  const compoundRateLabel = compoundRatePct > 0
+    ? compoundRatePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '';
+  const compoundMethodLabel = compoundMethod === 'price' ? 'Price' : 'Variável';
+
+  const simpleInterestPct = interestMode === 'percent' ? parsePercent(interestValue) : 0;
+  const penaltyPct = penaltyMode === 'percent' ? parsePercent(penaltyValue) : 0;
+  const simpleInterestFixedCents = interestMode === 'fixed' ? parseCurrencyToCents(interestValue) : 0;
+  const penaltyFixedCents = penaltyMode === 'fixed' ? parseCurrencyToCents(penaltyValue) : 0;
+
+  const interestCalcCents = compoundEnabled
+    ? 0
+    : Math.round(financedBaseCents * (simpleInterestPct / 100)) + simpleInterestFixedCents;
+  const penaltyCalcCents = Math.round(financedBaseCents * (penaltyPct / 100)) + penaltyFixedCents;
+
+  const requiresCreditCharge = paymentMethod === 'credit' && financedBaseCents > 0;
+
+  let totalFinalCents = financedBaseCents;
+  let compoundFullSchedule: ScheduleItem[] = [];
+  if (paymentMethod === 'credit') {
+    if (compoundEnabled) {
+      compoundFullSchedule = compoundMethod === 'price'
+        ? buildPriceSchedule(financedBaseCents, compoundRateDecimal, numInstallments, competenceMonth, penaltyCalcCents)
+        : buildVariableSchedule(financedBaseCents, compoundRateDecimal, numInstallments, competenceMonth, penaltyCalcCents);
+      totalFinalCents = compoundFullSchedule.reduce((sum, item) => sum + item.amount, 0);
+    } else {
+      totalFinalCents = financedBaseCents + interestCalcCents + penaltyCalcCents;
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedCardId && creditCards[0]) {
+      setSelectedCardId(creditCards[0].id);
+    }
+  }, [creditCards, selectedCardId]);
+
+  useEffect(() => {
+    if (!compoundEnabled) return;
+    if (interestMode !== 'percent') {
+      setInterestMode('percent');
+    }
+  }, [compoundEnabled, interestMode]);
+
+  useEffect(() => {
+    if (!splitEnabled) {
+      setCard2Id('');
+      setCard1Amount('');
+      setCard2Amount('');
+      setSplitDirty(false);
+      return;
+    }
+    const fallbackCard2 = creditCards.find(c => c.id !== selectedCardId)?.id || '';
+    if (!card2Id || card2Id === selectedCardId) {
+      setCard2Id(fallbackCard2);
+    }
+    if (!splitDirty) {
+      const half = Math.floor(totalFinalCents / 2);
+      setCard1Amount(formatCentsToInput(half));
+      setCard2Amount(formatCentsToInput(Math.max(totalFinalCents - half, 0)));
+    }
+  }, [splitEnabled, creditCards, selectedCardId, card2Id, splitDirty, totalFinalCents]);
+
+  useEffect(() => {
+    if (!splitEnabled || splitDirty) return;
+    const half = Math.floor(totalFinalCents / 2);
+    setCard1Amount(formatCentsToInput(half));
+    setCard2Amount(formatCentsToInput(Math.max(totalFinalCents - half, 0)));
+  }, [totalFinalCents, splitEnabled, splitDirty]);
+
+  const card1AmountCents = splitEnabled ? parseCurrencyToCents(card1Amount) : totalFinalCents;
+  const card2AmountCents = splitEnabled ? parseCurrencyToCents(card2Amount) : 0;
+  const splitMismatch = splitEnabled && Math.abs((card1AmountCents + card2AmountCents) - totalFinalCents) > 1;
+  const splitInvalidCards = splitEnabled && (!!card2Id && card2Id === selectedCardId);
+  const splitInvalidAmounts = splitEnabled && (card1AmountCents <= 0 || card2AmountCents <= 0);
+  const compoundReferenceTotalCents = compoundEnabled && compoundRateDecimal > 0
+    ? Math.round(financedBaseCents * Math.pow(1 + compoundRateDecimal, numInstallments))
+    : 0;
+
+  const getInstallmentSchedule = (amountCents: number, count: number, startMonth: string) => {
+    if (amountCents <= 0 || count <= 0) return [] as ScheduleItem[];
+    const { amounts, months } = calculateInstallments(amountCents, count, startMonth || getCurrentMonth());
+    return amounts.map((amt, idx) => ({
+      month: months[idx],
+      amount: amt,
+      interest: 0,
+      amortization: amt,
+      balance: 0,
+    }));
+  };
+
+  const card1PenaltyCents = splitEnabled && totalFinalCents > 0
+    ? Math.round(penaltyCalcCents * (card1AmountCents / totalFinalCents))
+    : penaltyCalcCents;
+  const card2PenaltyCents = splitEnabled ? penaltyCalcCents - card1PenaltyCents : 0;
+
+  const compoundFactor = compoundEnabled && financedBaseCents > 0
+    ? totalFinalCents / financedBaseCents
+    : 0;
+  const card1CapitalCents = compoundEnabled && splitEnabled && compoundFactor > 0
+    ? Math.round(financedBaseCents * (card1AmountCents / totalFinalCents))
+    : card1AmountCents;
+  const card2CapitalCents = compoundEnabled && splitEnabled
+    ? Math.max(financedBaseCents - card1CapitalCents, 0)
+    : card2AmountCents;
+
+  const scheduleSingle: ScheduleItem[] = requiresCreditCharge && !splitEnabled
+    ? (compoundEnabled
+      ? compoundFullSchedule
+      : getInstallmentSchedule(totalFinalCents, numInstallments, competenceMonth))
+    : [];
+
+  const scheduleCard1: ScheduleItem[] = requiresCreditCharge && splitEnabled
+    ? (compoundEnabled
+      ? adjustScheduleTotal(
+        compoundMethod === 'price'
+          ? buildPriceSchedule(card1CapitalCents, compoundRateDecimal, numInstallments, competenceMonth, card1PenaltyCents)
+          : buildVariableSchedule(card1CapitalCents, compoundRateDecimal, numInstallments, competenceMonth, card1PenaltyCents),
+        card1AmountCents,
+      )
+      : getInstallmentSchedule(card1AmountCents, numInstallments, competenceMonth))
+    : [];
+
+  const scheduleCard2: ScheduleItem[] = requiresCreditCharge && splitEnabled
+    ? (compoundEnabled
+      ? adjustScheduleTotal(
+        compoundMethod === 'price'
+          ? buildPriceSchedule(card2CapitalCents, compoundRateDecimal, numInstallments, competenceMonth, card2PenaltyCents)
+          : buildVariableSchedule(card2CapitalCents, compoundRateDecimal, numInstallments, competenceMonth, card2PenaltyCents),
+        card2AmountCents,
+      )
+      : getInstallmentSchedule(card2AmountCents, numInstallments, competenceMonth))
+    : [];
+
+  const previewTotalCents = splitEnabled
+    ? scheduleCard1.reduce((sum, i) => sum + i.amount, 0) + scheduleCard2.reduce((sum, i) => sum + i.amount, 0)
+    : scheduleSingle.reduce((sum, i) => sum + i.amount, 0);
+  const previewTotalInterestCents = previewTotalCents - financedBaseCents;
+
+  const getExistingUtilized = (cardId: string, month: string) => {
+    return installments
+      .filter(i => i.creditCardId === cardId && i.dueMonth === month)
+      .reduce((sum, i) => sum + i.amount, 0);
+  };
+
+  const getPreviewUtilized = (schedule: { month: string; amount: number }[], month: string) => {
+    return schedule
+      .filter(i => i.month === month)
+      .reduce((sum, i) => sum + i.amount, 0);
+  };
+
+  const card1Utilized = selectedCard && requiresCreditCharge
+    ? getExistingUtilized(selectedCard.id, competenceMonth)
+      + (splitEnabled ? getPreviewUtilized(scheduleCard1, competenceMonth) : getPreviewUtilized(scheduleSingle, competenceMonth))
+    : selectedCard
+      ? getExistingUtilized(selectedCard.id, competenceMonth)
+      : 0;
+
+  const card1Available = selectedCard ? selectedCard.limit - card1Utilized : 0;
+
+  const card2Utilized = secondCard && splitEnabled
+    ? getExistingUtilized(secondCard.id, competenceMonth) + getPreviewUtilized(scheduleCard2, competenceMonth)
+    : secondCard
+      ? getExistingUtilized(secondCard.id, competenceMonth)
+      : 0;
+
+  const card2Available = secondCard ? secondCard.limit - card2Utilized : 0;
+
+  const compoundSummary = compoundEnabled
+    ? (compoundRateLabel ? `Ativo · ${compoundRateLabel}% a.m. · ${compoundMethodLabel}` : 'Ativo · configurar')
+    : 'Inativo';
+
+  const previewFirstMonth = scheduleSingle[0]?.month || scheduleCard1[0]?.month || scheduleCard2[0]?.month || '';
+  const previewSummary = previewTotalCents > 0 && previewFirstMonth
+    ? `${numInstallments}x · primeira ${formatMonthLabel(previewFirstMonth)} · total pago ${formatCurrency(previewTotalCents)}`
+    : 'Prévia indisponível';
+
+  const isSubmitDisabled = !amountInCents || !category || !description
+    || isEntryInvalid
+    || (numInstallments < 1)
+    || (compoundEnabled && compoundRateInvalid)
+    || (requiresCreditCharge && !selectedCardId)
+    || (splitEnabled && (!card2Id || splitMismatch || splitInvalidCards || splitInvalidAmounts));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!amountInCents || !category || !description) return;
 
-    onSubmit({
-      type,
-      paymentMethod,
-      amount: amountInCents,
-      category,
-      description,
-      transactionDate,
-      competenceMonth,
-      status: paymentMethod === 'credit' ? 'pending' : status,
-      creditCardId: paymentMethod === 'credit' ? selectedCardId : undefined,
-    }, paymentMethod === 'credit' ? numInstallments : undefined);
+    if (isSubmitDisabled) return;
 
-    // Reset form
+    if (!requiresCreditCharge) {
+      onSubmit({
+        type,
+        paymentMethod: paymentMethod === 'credit' ? 'cash' : paymentMethod,
+        amount: amountInCents,
+        category,
+        description,
+        transactionDate,
+        competenceMonth,
+        status: paymentMethod === 'credit' ? 'paid' : status,
+      });
+    } else if (splitEnabled) {
+      onSubmit({
+        type,
+        paymentMethod,
+        amount: card1AmountCents,
+        category,
+        description,
+        transactionDate,
+        competenceMonth,
+        status: 'pending',
+        creditCardId: selectedCardId,
+      }, numInstallments);
+
+      onSubmit({
+        type,
+        paymentMethod,
+        amount: card2AmountCents,
+        category,
+        description,
+        transactionDate,
+        competenceMonth,
+        status: 'pending',
+        creditCardId: card2Id,
+      }, numInstallments);
+    } else {
+      onSubmit({
+        type,
+        paymentMethod,
+        amount: totalFinalCents,
+        category,
+        description,
+        transactionDate,
+        competenceMonth,
+        status: 'pending',
+        creditCardId: selectedCardId,
+      }, numInstallments);
+    }
+
     setAmount('');
+    setEntryAmount('');
     setCategory('');
     setDescription('');
     setInstallmentCount('1');
     setStatus('pending');
+    setInterestMode('percent');
+    setInterestValue('');
+    setPenaltyMode('percent');
+    setPenaltyValue('');
+    setCompoundEnabled(true);
+    setCompoundRate('');
+    setCompoundMethod('price');
+    setIsCompoundExpanded(false);
+    setIsPreviewExpanded(true);
+    setSplitEnabled(false);
+    setCard1Amount('');
+    setCard2Amount('');
+    setSplitDirty(false);
     onOpenChange(false);
   };
 
@@ -81,29 +455,40 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
     setType('expense');
     setPaymentMethod('cash');
     setAmount('');
+    setEntryAmount('');
     setCategory('');
     setDescription('');
-    setTransactionDate(format(new Date(), 'yyyy-MM-dd'));
-    setCompetenceMonth(getCurrentMonth());
     setStatus('pending');
     setInstallmentCount('1');
     setSelectedCardId(creditCards[0]?.id || '');
+    setInterestMode('percent');
+    setInterestValue('');
+    setPenaltyMode('percent');
+    setPenaltyValue('');
+    setCompoundEnabled(true);
+    setCompoundRate('');
+    setCompoundMethod('price');
+    setIsCompoundExpanded(false);
+    setIsPreviewExpanded(true);
+    setSplitEnabled(false);
+    setCard2Id('');
+    setCard1Amount('');
+    setCard2Amount('');
+    setSplitDirty(false);
   };
-
-  const selectedCard = creditCards.find(c => c.id === selectedCardId);
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => {
       if (!isOpen) resetForm();
       onOpenChange(isOpen);
     }}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[560px] flex max-h-[85vh] flex-col overflow-hidden p-0">
+        <DialogHeader className="px-6 pt-6 pb-4">
           <DialogTitle>Nova Movimentação</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Type Selection */}
+        <form onSubmit={handleSubmit} className="flex h-full min-h-0 flex-col">
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6 space-y-5 scroll-dark">
           <Tabs value={type} onValueChange={(v) => {
             setType(v as TransactionType);
             setCategory('');
@@ -121,7 +506,6 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
             </TabsList>
           </Tabs>
 
-          {/* Payment Method (only for expenses) */}
           {type === 'expense' && (
             <div className="space-y-2">
               <Label>Forma de Pagamento</Label>
@@ -134,8 +518,8 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
                   htmlFor="cash"
                   className={cn(
                     'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
-                    paymentMethod === 'cash' 
-                      ? 'border-primary bg-accent' 
+                    paymentMethod === 'cash'
+                      ? 'border-primary bg-accent'
                       : 'border-border hover:bg-muted'
                   )}
                 >
@@ -147,8 +531,8 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
                   htmlFor="credit"
                   className={cn(
                     'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
-                    paymentMethod === 'credit' 
-                      ? 'border-credit bg-credit-light' 
+                    paymentMethod === 'credit'
+                      ? 'border-credit bg-credit-light'
                       : 'border-border hover:bg-muted'
                   )}
                 >
@@ -159,42 +543,46 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
               </RadioGroup>
             </div>
           )}
-
-          {/* Credit Card Selection */}
           {paymentMethod === 'credit' && creditCards.length > 0 && (
-            <div className="space-y-2">
-              <Label>Cartão de Crédito</Label>
-              <Select value={selectedCardId} onValueChange={setSelectedCardId}>
-                <SelectTrigger>
-                  <div className="flex items-center gap-2">
-                    {selectedCard && (
-                      <div 
-                        className="w-3 h-3 rounded-full" 
-                        style={{ backgroundColor: selectedCard.color }}
-                      />
-                    )}
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label>Cartão de Crédito</Label>
+                <Select value={selectedCardId} onValueChange={setSelectedCardId}>
+                  <SelectTrigger>
                     <SelectValue placeholder="Selecione o cartão" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {creditCards.map(card => (
+                      <SelectItem key={card.id} value={card.id}>
+                        {card.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedCard && (
+                <div className="rounded-lg border p-3 bg-muted/30 text-sm space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Limite do cartão</span>
+                    <span className="font-mono">{formatCurrency(selectedCard.limit)}</span>
                   </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {creditCards.map(card => (
-                    <SelectItem key={card.id} value={card.id}>
-                      <div className="flex items-center gap-2">
-                        <div 
-                          className="w-3 h-3 rounded-full" 
-                          style={{ backgroundColor: card.color }}
-                        />
-                        <span>{card.name}</span>
-                        <span className="text-muted-foreground">•••• {card.lastDigits}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Utilizado na competência</span>
+                    <span className="font-mono text-expense">{formatCurrency(card1Utilized)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Crédito disponível</span>
+                    <span className={cn('font-mono', card1Available >= 0 ? 'text-income' : 'text-expense')}>
+                      {formatCurrency(card1Available)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Competência: {formatMonthLabel(competenceMonth)}</p>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Amount & Installments */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="amount">Valor Total</Label>
@@ -224,9 +612,9 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
                   <SelectContent>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map(num => (
                       <SelectItem key={num} value={num.toString()}>
-                        {num}x {num > 1 && amountInCents > 0 && (
+                        {num}x {num > 1 && totalFinalCents > 0 && (
                           <span className="text-muted-foreground ml-1">
-                            de {formatCurrency(Math.floor(amountInCents / num))}
+                            de {formatCurrency(Math.floor(totalFinalCents / num))}
                           </span>
                         )}
                       </SelectItem>
@@ -237,29 +625,410 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
             )}
           </div>
 
-          {/* Installment Preview */}
-          {installmentPreview && (
-            <div className="p-3 rounded-lg bg-credit-light border border-credit/20 space-y-2">
-              <p className="text-sm font-medium text-credit flex items-center gap-2">
-                <CreditCardIcon className="h-4 w-4" />
-                Prévia das Parcelas
-              </p>
-              <div className="grid grid-cols-4 gap-2 text-xs">
-                {installmentPreview.amounts.map((amt, idx) => (
-                  <div key={idx} className="p-2 bg-card rounded text-center">
-                    <p className="text-muted-foreground">{idx + 1}ª</p>
-                    <p className="font-mono font-medium">{formatCurrency(amt)}</p>
-                  </div>
-                ))}
+          {paymentMethod === 'credit' && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="entryAmount">Entrada (R$)</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                    R$
+                  </span>
+                  <Input
+                    id="entryAmount"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0,00"
+                    value={entryAmount}
+                    onChange={(e) => setEntryAmount(e.target.value)}
+                    className="pl-10 font-mono"
+                  />
+                </div>
+                {isEntryInvalid && (
+                  <p className="text-xs text-expense">A entrada não pode ser maior que o valor total.</p>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" />
-                Soma exata: {formatCurrency(installmentPreview.amounts.reduce((a, b) => a + b, 0))}
-              </p>
+              <div className="space-y-2">
+                <Label>Valor financiado</Label>
+                <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm font-mono">
+                  {formatCurrency(financedBaseCents)}
+                </div>
+              </div>
             </div>
           )}
 
-          {/* Category */}
+          {paymentMethod === 'credit' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Juros</Label>
+                  <div className="flex gap-2">
+                    <Select
+                      value={interestMode}
+                      onValueChange={(v) => setInterestMode(v as 'percent' | 'fixed')}
+                      disabled={compoundEnabled}
+                    >
+                      <SelectTrigger className="w-[92px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="percent">%</SelectItem>
+                        <SelectItem value="fixed">R$</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={interestMode === 'percent' ? '0,0' : '0,00'}
+                      value={interestValue}
+                      onChange={(e) => setInterestValue(e.target.value)}
+                      className="font-mono"
+                      disabled={compoundEnabled}
+                    />
+                  </div>
+                  {compoundEnabled && (
+                    <p className="text-xs text-muted-foreground">Juros em R$ único desativado.</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Multa</Label>
+                  <div className="flex gap-2">
+                    <Select value={penaltyMode} onValueChange={(v) => setPenaltyMode(v as 'percent' | 'fixed')}>
+                      <SelectTrigger className="w-[92px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="percent">%</SelectItem>
+                        <SelectItem value="fixed">R$</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={penaltyMode === 'percent' ? '0,0' : '0,00'}
+                      value={penaltyValue}
+                      onChange={(e) => setPenaltyValue(e.target.value)}
+                      className="font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-muted/30">
+                <div
+                  role="button"
+                  aria-expanded={isCompoundExpanded}
+                  className="flex items-start justify-between gap-3 p-3 cursor-pointer"
+                  onClick={() => setIsCompoundExpanded((prev) => !prev)}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <ChevronRight className={cn('h-4 w-4 transition-transform', isCompoundExpanded && 'rotate-90')} />
+                      <Label>Juros compostos mensais</Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{compoundSummary}</p>
+                  </div>
+                  <div onClick={(event) => event.stopPropagation()}>
+                    <Switch
+                      checked={compoundEnabled}
+                      onCheckedChange={(checked) => {
+                        setCompoundEnabled(checked);
+                        setIsCompoundExpanded(checked);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div
+                  className={cn(
+                    'px-3 pb-3 transition-all duration-200',
+                    isCompoundExpanded ? 'max-h-[420px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'
+                  )}
+                >
+                  <div className="rounded-lg border p-3 bg-background space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Taxa de juros mensal (%)</Label>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0,0"
+                          value={compoundRate}
+                          onChange={(e) => setCompoundRate(e.target.value)}
+                          className="font-mono"
+                          disabled={!compoundEnabled}
+                        />
+                        {compoundRateInvalid && (
+                          <p className="text-xs text-expense">A taxa não pode ser negativa.</p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Método</Label>
+                        <Select
+                          value={compoundMethod}
+                          onValueChange={(v) => setCompoundMethod(v as 'price' | 'variable')}
+                          disabled={!compoundEnabled}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="price">Parcela fixa (Price)</SelectItem>
+                            <SelectItem value="variable">Parcela variável</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Os juros incidem sobre o saldo devedor acumulado (juros sobre juros). Alterar o método muda o valor das parcelas.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {paymentMethod === 'credit' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div>
+                  <Label>Pagar com 2 cartões</Label>
+                  <p className="text-xs text-muted-foreground">Distribua o valor final entre dois cartões.</p>
+                </div>
+                <Switch
+                  checked={splitEnabled}
+                  onCheckedChange={(checked) => setSplitEnabled(checked)}
+                  disabled={creditCards.length < 2}
+                />
+              </div>
+
+              {creditCards.length < 2 && (
+                <p className="text-xs text-muted-foreground">Cadastre outro cartão para habilitar o split.</p>
+              )}
+
+              {splitEnabled && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Cartão 1</Label>
+                      <Select value={selectedCardId} onValueChange={setSelectedCardId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o cartão" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {creditCards.map(card => (
+                            <SelectItem key={card.id} value={card.id} disabled={card.id === card2Id}>
+                              {card.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Valor no Cartão 1</Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">R$</span>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          value={card1Amount}
+                          onChange={(e) => {
+                            setCard1Amount(e.target.value);
+                            setSplitDirty(true);
+                          }}
+                          className="pl-10 font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Cartão 2</Label>
+                      <Select value={card2Id} onValueChange={setCard2Id}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o cartão" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {creditCards.map(card => (
+                            <SelectItem key={card.id} value={card.id} disabled={card.id === selectedCardId}>
+                              {card.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Valor no Cartão 2</Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">R$</span>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          value={card2Amount}
+                          onChange={(e) => {
+                            setCard2Amount(e.target.value);
+                            setSplitDirty(true);
+                          }}
+                          className="pl-10 font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {splitMismatch && (
+                    <p className="text-xs text-expense">A soma dos cartões deve fechar com o valor final.</p>
+                  )}
+                  {splitInvalidCards && (
+                    <p className="text-xs text-expense">Selecione cartões diferentes.</p>
+                  )}
+
+                  {selectedCard && (
+                    <div className="rounded-lg border p-3 bg-muted/30 text-sm space-y-1">
+                      <p className="text-xs font-medium">{selectedCard.name}</p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Utilizado na competência</span>
+                        <span className="font-mono text-expense">{formatCurrency(card1Utilized)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Crédito disponível</span>
+                        <span className={cn('font-mono', card1Available >= 0 ? 'text-income' : 'text-expense')}>
+                          {formatCurrency(card1Available)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {secondCard && (
+                    <div className="rounded-lg border p-3 bg-muted/30 text-sm space-y-1">
+                      <p className="text-xs font-medium">{secondCard.name}</p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Utilizado na competência</span>
+                        <span className="font-mono text-expense">{formatCurrency(card2Utilized)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Crédito disponível</span>
+                        <span className={cn('font-mono', card2Available >= 0 ? 'text-income' : 'text-expense')}>
+                          {formatCurrency(card2Available)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {requiresCreditCharge && (
+            <div className="rounded-lg border bg-credit-light border-credit/20">
+              <div
+                role="button"
+                aria-expanded={isPreviewExpanded}
+                className="flex items-start justify-between gap-3 p-3 cursor-pointer"
+                onClick={() => setIsPreviewExpanded((prev) => !prev)}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-credit">
+                    <ChevronRight className={cn('h-4 w-4 transition-transform', isPreviewExpanded && 'rotate-90')} />
+                    <span className="text-sm font-medium flex items-center gap-2">
+                      <CreditCardIcon className="h-4 w-4" />
+                      Prévia das Parcelas
+                    </span>
+                  </div>
+                  {!isPreviewExpanded && (
+                    <p className="text-xs text-muted-foreground">{previewSummary}</p>
+                  )}
+                </div>
+              </div>
+
+              <div
+                className={cn(
+                  'px-3 pb-3 transition-all duration-200',
+                  isPreviewExpanded ? 'max-h-[720px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'
+                )}
+              >
+                {!splitEnabled && (
+                  <div className="grid grid-cols-4 gap-2 text-xs">
+                    {scheduleSingle.map((inst, idx) => (
+                      <div key={idx} className="p-2 bg-card rounded text-center">
+                        <p className="text-muted-foreground">{formatMonthLabel(inst.month)}</p>
+                        <p className="font-mono font-medium">{formatCurrency(inst.amount)}</p>
+                        {compoundEnabled && (
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            Juros: {formatCurrency(inst.interest)} · Amort.: {formatCurrency(inst.amortization)} · Saldo: {formatCurrency(inst.balance)}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {splitEnabled && (
+                  <div className="space-y-3 text-xs">
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium">{selectedCard?.name}</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {scheduleCard1.map((inst, idx) => (
+                          <div key={idx} className="p-2 bg-card rounded text-center">
+                            <p className="text-muted-foreground">{formatMonthLabel(inst.month)}</p>
+                            <p className="font-mono font-medium">{formatCurrency(inst.amount)}</p>
+                            {compoundEnabled && (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                Juros: {formatCurrency(inst.interest)} · Amort.: {formatCurrency(inst.amortization)} · Saldo: {formatCurrency(inst.balance)}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium">{secondCard?.name}</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {scheduleCard2.map((inst, idx) => (
+                          <div key={idx} className="p-2 bg-card rounded text-center">
+                            <p className="text-muted-foreground">{formatMonthLabel(inst.month)}</p>
+                            <p className="font-mono font-medium">{formatCurrency(inst.amount)}</p>
+                            {compoundEnabled && (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                Juros: {formatCurrency(inst.interest)} · Amort.: {formatCurrency(inst.amortization)} · Saldo: {formatCurrency(inst.balance)}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-2">
+                  <AlertCircle className="h-3 w-3" />
+                  Soma exata: {formatCurrency(previewTotalCents)}
+                </p>
+                <div className="pt-2 mt-2 border-t text-xs space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Capital (C)</span>
+                    <span className="font-mono">{formatCurrency(financedBaseCents)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Total pago</span>
+                    <span className="font-mono">{formatCurrency(previewTotalCents)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Total de juros</span>
+                    <span className="font-mono">{formatCurrency(previewTotalInterestCents)}</span>
+                  </div>
+                  {compoundEnabled && compoundReferenceTotalCents > 0 && (
+                    <div className="flex items-center justify-between text-muted-foreground">
+                      <span>Total com juros (referência)</span>
+                      <span className="font-mono">{formatCurrency(compoundReferenceTotalCents)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="category">Categoria</Label>
             <Select value={category} onValueChange={setCategory}>
@@ -276,7 +1045,6 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
             </Select>
           </div>
 
-          {/* Description */}
           <div className="space-y-2">
             <Label htmlFor="description">Descrição</Label>
             <Input
@@ -287,29 +1055,6 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
             />
           </div>
 
-          {/* Dates */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="transactionDate">Data do Lançamento</Label>
-              <Input
-                id="transactionDate"
-                type="date"
-                value={transactionDate}
-                onChange={(e) => setTransactionDate(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="competenceMonth">Competência</Label>
-              <Input
-                id="competenceMonth"
-                type="month"
-                value={competenceMonth}
-                onChange={(e) => setCompetenceMonth(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Status (only for cash) */}
           {paymentMethod === 'cash' && (
             <div className="space-y-2">
               <Label>Status</Label>
@@ -322,8 +1067,8 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
                   htmlFor="pending"
                   className={cn(
                     'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
-                    status === 'pending' 
-                      ? 'border-pending bg-pending-light' 
+                    status === 'pending'
+                      ? 'border-pending bg-pending-light'
                       : 'border-border hover:bg-muted'
                   )}
                 >
@@ -334,8 +1079,8 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
                   htmlFor="paid"
                   className={cn(
                     'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
-                    status === 'paid' 
-                      ? 'border-income bg-income-light' 
+                    status === 'paid'
+                      ? 'border-income bg-income-light'
                       : 'border-border hover:bg-muted'
                   )}
                 >
@@ -345,12 +1090,15 @@ export function TransactionForm({ open, onOpenChange, categories, creditCards, o
               </RadioGroup>
             </div>
           )}
-
-          <Button type="submit" className="w-full" disabled={!amountInCents || !category || !description}>
-            Adicionar {type === 'income' ? 'Entrada' : 'Saída'}
-          </Button>
+          </div>
+          <div className="sticky bottom-0 border-t bg-background px-6 py-4">
+            <Button type="submit" className="w-full" disabled={isSubmitDisabled}>
+              Adicionar {type === 'income' ? 'Entrada' : 'Saída'}
+            </Button>
+          </div>
         </form>
       </DialogContent>
     </Dialog>
   );
 }
+
