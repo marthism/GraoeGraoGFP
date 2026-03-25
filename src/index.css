@@ -1,0 +1,293 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Background & Foreground */
+    --background: 210 20% 98%;
+    --foreground: 215 25% 15%;
+
+    /* Cards & Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+
+    /* Primary - Deep Teal/Blue for trust */
+    --primary: 200 80% 30%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - Slate */
+    --secondary: 210 15% 93%;
+    --secondary-foreground: 215 25% 25%;
+
+    /* Muted */
+    --muted: 210 15% 96%;
+    --muted-foreground: 215 15% 50%;
+
+    /* Accent */
+    --accent: 200 70% 95%;
+    --accent-foreground: 200 80% 25%;
+
+    /* Financial Colors */
+    --income: 155 70% 35%;
+    --income-foreground: 0 0% 100%;
+    --income-light: 155 60% 95%;
+    
+    --expense: 0 70% 50%;
+    --expense-foreground: 0 0% 100%;
+    --expense-light: 0 60% 97%;
+    
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --warning-light: 38 90% 95%;
+    
+    --pending: 220 15% 60%;
+    --pending-foreground: 0 0% 100%;
+    --pending-light: 220 15% 96%;
+
+    /* Credit Card */
+    --credit: 260 60% 55%;
+    --credit-foreground: 0 0% 100%;
+    --credit-light: 260 50% 96%;
+
+    /* Destructive */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders & Inputs */
+    --border: 214 20% 90%;
+    --input: 214 20% 90%;
+    --ring: 200 80% 30%;
+
+    --radius: 0.625rem;
+
+    /* Sidebar */
+    --sidebar-background: 215 25% 12%;
+    --sidebar-foreground: 210 15% 85%;
+    --sidebar-primary: 200 70% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 25% 18%;
+    --sidebar-accent-foreground: 210 15% 95%;
+    --sidebar-border: 215 20% 20%;
+    --sidebar-ring: 200 70% 50%;
+  }
+
+  .dark {
+    /* Minimalist Deep Slate Background */
+    --background: 220 20% 6%;
+    --foreground: 210 20% 96%;
+
+    /* Sleek Elevated Cards */
+    --card: 220 20% 9%;
+    --card-foreground: 210 20% 96%;
+    --popover: 220 20% 9%;
+    --popover-foreground: 210 20% 96%;
+
+    /* Primary Accent (Vibrant Blue) */
+    --primary: 210 100% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 15%;
+    --secondary-foreground: 210 20% 96%;
+
+    --muted: 220 15% 13%;
+    --muted-foreground: 215 15% 65%;
+
+    --accent: 220 20% 18%;
+    --accent-foreground: 210 20% 96%;
+
+    /* Accent Colors (Used only for text/borders/icons, not solid backgrounds) */
+    --income: 142 70% 45%;
+    --income-foreground: 0 0% 100%;
+    --income-light: 220 20% 10%; /* Replaced heavy green background with card color */
+    
+    --expense: 0 75% 60%;
+    --expense-foreground: 0 0% 100%;
+    --expense-light: 220 20% 10%; /* Replaced heavy red background with card color */
+    
+    --warning: 38 90% 55%;
+    --warning-foreground: 0 0% 100%;
+    --warning-light: 220 20% 10%;
+    
+    --pending: 220 15% 60%;
+    --pending-foreground: 0 0% 100%;
+    --pending-light: 220 20% 10%;
+
+    --credit: 260 70% 65%;
+    --credit-foreground: 0 0% 100%;
+    --credit-light: 220 20% 10%;
+
+    --destructive: 0 75% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 16%;
+    --input: 220 15% 16%;
+    --ring: 210 100% 50%;
+
+    --sidebar-background: 215 30% 6%;
+    --sidebar-foreground: 210 15% 85%;
+    --sidebar-primary: 200 70% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 25% 12%;
+    --sidebar-accent-foreground: 210 15% 95%;
+    --sidebar-border: 215 25% 15%;
+    --sidebar-ring: 200 70% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Global Scrollbar Styles */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+  .scroll-dark {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--sidebar-border)) transparent;
+  }
+
+  .scroll-dark::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .scroll-dark::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-dark::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--sidebar-border));
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .scroll-dark::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--sidebar-accent));
+  }
+
+  /* Financial value displays */
+  .value-income {
+    @apply text-income font-semibold;
+  }
+
+  .value-expense {
+    @apply text-expense font-semibold;
+  }
+
+  .value-pending {
+    @apply text-pending;
+  }
+
+  .value-neutral {
+    @apply text-foreground font-semibold;
+  }
+
+  /* Status badges */
+  .badge-paid {
+    @apply bg-income/15 text-income border-income/30;
+  }
+
+  .badge-pending {
+    @apply bg-pending-light text-pending border-pending/30;
+  }
+
+  .badge-overdue {
+    @apply bg-expense-light text-expense border-expense/30;
+  }
+
+  /* Card variants */
+  .card-income {
+    @apply bg-income-light border-income/20;
+  }
+
+  .card-expense {
+    @apply bg-expense-light border-expense/20;
+  }
+
+  .card-warning {
+    @apply bg-warning-light border-warning/20;
+  }
+
+  .card-credit {
+    @apply bg-credit-light border-credit/20;
+  }
+
+  /* Animations */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { 
+      opacity: 0; 
+      transform: translateY(10px); 
+    }
+    to { 
+      opacity: 1; 
+      transform: translateY(0); 
+    }
+  }
+
+  @keyframes scaleIn {
+    from { 
+      opacity: 0; 
+      transform: scale(0.95); 
+    }
+    to { 
+      opacity: 1; 
+      transform: scale(1); 
+    }
+  }
+}
