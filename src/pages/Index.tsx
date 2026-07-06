@@ -52,6 +52,9 @@ const Index = () => {
     updateTransaction,
     updateTransactionStatus,
     deleteTransaction,
+    deleteTransactionGroup,
+    postponeInstallment,
+    diluteInstallment,
     payInvoice,
     setBudget,
     getSpendingByCategory,
@@ -260,6 +263,9 @@ const Index = () => {
               allTransactions={transactions}
               onUpdateStatus={updateTransactionStatus}
               onDelete={deleteTransaction}
+              onDeleteGroup={deleteTransactionGroup}
+              onPostpone={postponeInstallment}
+              onDilute={diluteInstallment}
               onEdit={(tx) => {
                 setEditingTransaction(tx);
                 setIsFormOpen(true);

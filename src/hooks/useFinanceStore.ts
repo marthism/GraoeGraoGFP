@@ -47,6 +47,9 @@ interface FinanceStore extends FinanceData {
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   updateTransactionStatus: (id: string, status: TransactionStatus, paymentDate?: string) => void;
   deleteTransaction: (id: string) => void;
+  deleteTransactionGroup: (groupId: string) => void;
+  postponeInstallment: (id: string) => void;
+  diluteInstallment: (id: string) => void;
   payInvoice: (invoiceId: string, paymentDate?: string) => void;
   setBudget: (categoryId: string, month: string, amount: number) => void;
   getBudget: (categoryId: string, month: string) => number;
@@ -195,6 +198,9 @@ export const useFinanceStore = create<FinanceStore>()(
               dueDate: dueDateStr,
               competenceMonth: cMonth,
               recurrenceId,
+              installmentIndex: effectiveRecurrenceCount > 1 ? i + 1 : undefined,
+              installmentsTotal: effectiveRecurrenceCount > 1 ? effectiveRecurrenceCount : undefined,
+              installmentGroupId: effectiveRecurrenceCount > 1 ? recurrenceId : undefined,
               createdAt: now,
               updatedAt: now,
             });
@@ -346,6 +352,126 @@ export const useFinanceStore = create<FinanceStore>()(
             transactions: state.transactions.filter(t => t.id !== id),
             installments: state.installments.filter(i => i.transactionId !== id),
             invoices: updatedInvoices,
+          };
+        }),
+      deleteTransactionGroup: groupId =>
+        set(state => {
+          const groupTxIds = new Set(
+            state.transactions.filter(t => t.installmentGroupId === groupId).map(t => t.id)
+          );
+
+          const relatedInstallments = state.installments.filter(i => groupTxIds.has(i.transactionId));
+          const installmentIds = new Set(relatedInstallments.map(i => i.id));
+
+          const updatedInvoices = state.invoices
+            .map(inv => ({
+              ...inv,
+              installmentIds: inv.installmentIds.filter(iid => !installmentIds.has(iid)),
+              totalAmount:
+                inv.totalAmount -
+                relatedInstallments
+                  .filter(i => inv.installmentIds.includes(i.id))
+                  .reduce((sum, i) => sum + i.amount, 0),
+            }))
+            .filter(inv => inv.installmentIds.length > 0);
+
+          return {
+            ...state,
+            transactions: state.transactions.filter(t => !groupTxIds.has(t.id)),
+            installments: state.installments.filter(i => !groupTxIds.has(i.transactionId)),
+            invoices: updatedInvoices,
+          };
+        }),
+      postponeInstallment: id =>
+        set(state => {
+          const tx = state.transactions.find(t => t.id === id);
+          if (!tx || tx.status !== 'pending' || tx.paymentMethod === 'credit') return state;
+
+          const now = new Date().toISOString();
+          const shift = (dateStr?: string) =>
+            dateStr ? format(addMonthsPreserveDay(parseISO(dateStr), 1), 'yyyy-MM-dd') : dateStr;
+
+          const newTransactionDate = shift(tx.transactionDate) as string;
+          const newDate = shift(tx.date);
+          const newDueDate = shift(tx.dueDate);
+          const newCompetenceMonth = format(
+            parseISO(tx.type === 'income' ? (newDate || newTransactionDate) : newTransactionDate),
+            'yyyy-MM'
+          );
+
+          return {
+            ...state,
+            transactions: state.transactions.map(t =>
+              t.id === id
+                ? {
+                    ...t,
+                    transactionDate: newTransactionDate,
+                    date: newDate,
+                    dueDate: newDueDate,
+                    competenceMonth: newCompetenceMonth,
+                    updatedAt: now,
+                  }
+                : t
+            ),
+          };
+        }),
+      diluteInstallment: id =>
+        set(state => {
+          const tx = state.transactions.find(t => t.id === id);
+          if (
+            !tx ||
+            tx.status !== 'pending' ||
+            tx.paymentMethod === 'credit' ||
+            !tx.installmentGroupId ||
+            !tx.installmentIndex
+          ) {
+            return state;
+          }
+
+          const removedIndex = tx.installmentIndex;
+          const remaining = state.transactions
+            .filter(
+              t =>
+                t.installmentGroupId === tx.installmentGroupId &&
+                t.status === 'pending' &&
+                (t.installmentIndex || 0) > removedIndex
+            )
+            .sort((a, b) => (a.installmentIndex || 0) - (b.installmentIndex || 0));
+
+          if (remaining.length === 0) return state;
+
+          const base = Math.floor(tx.amount / remaining.length);
+          const rest = tx.amount - base * remaining.length;
+          const remainingIds = new Set(remaining.map(t => t.id));
+          const now = new Date().toISOString();
+
+          const updatedTransactions = state.transactions
+            .filter(t => t.id !== id)
+            .map(t => {
+              if (t.installmentGroupId !== tx.installmentGroupId) return t;
+
+              const shareIndex = remaining.findIndex(r => r.id === t.id);
+              const isRecipient = shareIndex !== -1;
+              const share = isRecipient ? base + (shareIndex < rest ? 1 : 0) : 0;
+
+              return {
+                ...t,
+                installmentsTotal: (t.installmentsTotal || 1) - 1,
+                installmentIndex:
+                  (t.installmentIndex || 0) > removedIndex
+                    ? (t.installmentIndex || 0) - 1
+                    : t.installmentIndex,
+                amount: isRecipient ? t.amount + share : t.amount,
+                absorbedInstallments: isRecipient
+                  ? [...(t.absorbedInstallments || []), removedIndex]
+                  : t.absorbedInstallments,
+                updatedAt: remainingIds.has(t.id) ? now : t.updatedAt,
+              };
+            });
+
+          return {
+            ...state,
+            transactions: updatedTransactions,
           };
         }),
       payInvoice: (invoiceId, paymentDate) =>

@@ -8,10 +8,11 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Transaction, Category, TransactionStatus, CreditCard as CreditCardType } from '@/types/finance';
 import { formatCurrency, isOverdue, getInstallmentMeta, getMonthDisplayName, getEffectiveDate, parseIsoDateLocal } from '@/lib/finance-utils';
-import { ArrowDownLeft, ArrowUpRight, CreditCard, CheckCircle, Trash2, Calendar, Filter, List, Pencil } from 'lucide-react';
-import { format, parseISO, isAfter, startOfDay, subDays } from 'date-fns';
+import { ArrowDownLeft, ArrowUpRight, CreditCard, CheckCircle, Trash2, Calendar, Filter, List, Pencil, MoreVertical, CalendarClock, SplitSquareHorizontal } from 'lucide-react';
+import { format, parseISO, isAfter, startOfDay, subDays, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 
@@ -24,6 +25,9 @@ interface TransactionListProps {
   onUpdateStatus?: (id: string, status: TransactionStatus, paymentDate?: string) => void;
   onDelete?: (id: string) => void;
   onEdit?: (transaction: Transaction) => void;
+  onDeleteGroup?: (groupId: string) => void;
+  onPostpone?: (id: string) => void;
+  onDilute?: (id: string) => void;
   title?: string;
   emptyMessage?: string;
   readOnly?: boolean;
@@ -42,6 +46,9 @@ export function TransactionList({
   onUpdateStatus,
   onDelete,
   onEdit,
+  onDeleteGroup,
+  onPostpone,
+  onDilute,
   title = "Movimentações",
   emptyMessage = "Nenhuma movimentação encontrada",
   readOnly = false,
@@ -53,7 +60,7 @@ export function TransactionList({
   creditCards,
 }: TransactionListProps) {
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'pay' | 'delete';
+    type: 'pay' | 'delete' | 'delete-scope' | 'delete-all' | 'dilute';
     transaction: Transaction;
   } | null>(null);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
@@ -94,6 +101,17 @@ export function TransactionList({
   const dialogCompetence = formatCompetence(confirmAction?.transaction?.competenceMonth);
   const dialogDueDate = confirmAction?.transaction?.dueDate || confirmAction?.transaction?.transactionDate;
 
+  const diluteTx = confirmAction?.type === 'dilute' ? confirmAction.transaction : null;
+  const diluteRemaining = diluteTx
+    ? allTransactions.filter(
+        t =>
+          t.installmentGroupId === diluteTx.installmentGroupId &&
+          t.status === 'pending' &&
+          (t.installmentIndex || 0) > (diluteTx.installmentIndex || 0)
+      )
+    : [];
+  const diluteShare = diluteTx && diluteRemaining.length > 0 ? Math.floor(diluteTx.amount / diluteRemaining.length) : 0;
+
   // Apply filter if enabled
   const filteredTransactions = transactions.filter(tx => {
     if (!enableFilter || recentFilter === "none") return true;
@@ -106,7 +124,14 @@ export function TransactionList({
           : recentFilter === "30d" ? 30
             : 0;
     const limitDate = subDays(today, Math.max(daysBack - 1, 0));
-    return isAfter(txDate, limitDate) || txDate.getTime() === limitDate.getTime();
+    const withinLowerBound = isAfter(txDate, limitDate) || txDate.getTime() === limitDate.getTime();
+
+    // This widget monitors the current month only — otherwise long
+    // recurrences/installments flood it with future occurrences.
+    const maxFutureDate = endOfMonth(today);
+    const withinUpperBound = !isAfter(txDate, maxFutureDate);
+
+    return withinLowerBound && withinUpperBound;
   });
 
   // Group transactions for Dashboard (one line per installmentGroupId)
@@ -201,7 +226,7 @@ export function TransactionList({
               <div className="px-6 py-2.5 border-y border-border/40 bg-muted/10">
                 <p className="text-[13px] font-medium text-muted-foreground flex items-center gap-2 uppercase tracking-wider">
                   <Calendar className="h-3.5 w-3.5" />
-                  {format(parseIsoDateLocal(date), "EEEE, dd 'de' MMMM", { locale: ptBR })}
+                  {format(parseIsoDateLocal(date), "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
                 </p>
               </div>
               <div className="divide-y">
@@ -214,9 +239,24 @@ export function TransactionList({
                   const groupInfo = tx.installmentGroupId ? installmentGroups.get(tx.installmentGroupId) : undefined;
                   const installmentsCount = tx.installmentsTotal || groupInfo?.count || 0;
                   const isInstallment = installmentsCount > 1;
-                  const installmentTotal = isInstallment
+                  // Only credit purchases show the full purchase price as the headline
+                  // (it's one event). Recurring cash/pix entries show what's actually
+                  // due/paid that month — showing the multi-month total there is misleading.
+                  const isCreditPurchase = tx.paymentMethod === 'credit' && isInstallment;
+                  const installmentTotal = isCreditPurchase
                     ? (groupInfo ? groupInfo.totalAmount : tx.amount * installmentsCount)
                     : tx.amount;
+
+                  const canManageInstallment =
+                    isPending && isInstallment && tx.paymentMethod !== 'credit' && !!tx.installmentGroupId;
+                  const canDilute =
+                    canManageInstallment &&
+                    allTransactions.some(
+                      t =>
+                        t.installmentGroupId === tx.installmentGroupId &&
+                        t.status === 'pending' &&
+                        (t.installmentIndex || 0) > (tx.installmentIndex || 0)
+                    );
 
                   return (
                     <div
@@ -270,6 +310,20 @@ export function TransactionList({
                                 style={{ backgroundColor: getCategoryColor(tx.category) }}
                               />
                               <span>{getCategoryName(tx.category)}</span>
+                              {tx.installmentsTotal && tx.installmentsTotal > 1 && tx.installmentIndex && (
+                                <>
+                                  <span>•</span>
+                                  <span className="font-medium text-foreground/80">
+                                    Parcela {tx.installmentIndex}/{tx.installmentsTotal}
+                                  </span>
+                                </>
+                              )}
+                              {tx.absorbedInstallments && tx.absorbedInstallments.length > 0 && (
+                                <span className="text-amber-500">
+                                  (inclui parcela{tx.absorbedInstallments.length > 1 ? 's' : ''}{' '}
+                                  {tx.absorbedInstallments.join(', ')} diluída{tx.absorbedInstallments.length > 1 ? 's' : ''})
+                                </span>
+                              )}
                               {tx.paymentMethod === 'credit' && (
                                 <>
                                   <span>•</span>
@@ -299,7 +353,7 @@ export function TransactionList({
                           )}>
                             {isIncome ? '+' : '-'}{formatCurrency(installmentTotal)}
                           </p>
-                          {isInstallment && (
+                          {isCreditPurchase && (
                             <p className="text-[10px] text-muted-foreground leading-none">
                               {installmentsCount}x de {formatCurrency(tx.amount)}
                             </p>
@@ -342,6 +396,41 @@ export function TransactionList({
                                   <TooltipContent>Marcar como pago</TooltipContent>
                                 </Tooltip>
                               )}
+                              {canManageInstallment && (onPostpone || onDilute) && (
+                                <DropdownMenu>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                          onClick={(event) => event.stopPropagation()}
+                                        >
+                                          <MoreVertical className="h-4 w-4" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Renegociar parcela</TooltipContent>
+                                  </Tooltip>
+                                  <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+                                    {onPostpone && (
+                                      <DropdownMenuItem onClick={() => onPostpone(tx.id)}>
+                                        <CalendarClock className="h-4 w-4 mr-2" />
+                                        Empurrar pro próximo mês
+                                      </DropdownMenuItem>
+                                    )}
+                                    {onDilute && canDilute && (
+                                      <DropdownMenuItem
+                                        onClick={() => setConfirmAction({ type: 'dilute', transaction: tx })}
+                                      >
+                                        <SplitSquareHorizontal className="h-4 w-4 mr-2" />
+                                        Diluir nas parcelas restantes
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
                               {onEdit && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -368,7 +457,14 @@ export function TransactionList({
                                     className="h-8 w-8 text-destructive hover:text-destructive"
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setConfirmAction({ type: 'delete', transaction: tx });
+                                      const groupCount = tx.installmentGroupId
+                                        ? installmentGroups.get(tx.installmentGroupId)?.count || 0
+                                        : 0;
+                                      if (tx.installmentGroupId && groupCount > 1) {
+                                        setConfirmAction({ type: 'delete-scope', transaction: tx });
+                                      } else {
+                                        setConfirmAction({ type: 'delete', transaction: tx });
+                                      }
                                     }}
                                   >
                                     <Trash2 className="h-4 w-4" />
@@ -389,7 +485,10 @@ export function TransactionList({
         </div>
       </CardContent>
 
-      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+      <AlertDialog
+        open={confirmAction?.type === 'pay' || confirmAction?.type === 'delete'}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
@@ -445,6 +544,107 @@ export function TransactionList({
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog
+        open={confirmAction?.type === 'delete-scope'}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir parcela</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`"${confirmAction?.transaction?.description}" faz parte de ${
+                confirmAction?.transaction?.installmentGroupId
+                  ? installmentGroups.get(confirmAction.transaction.installmentGroupId)?.count || 0
+                  : 0
+              } parcelas. O que deseja excluir?`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (confirmAction?.transaction) {
+                  onDelete?.(confirmAction.transaction.id);
+                }
+                setConfirmAction(null);
+              }}
+            >
+              Somente esta parcela
+            </Button>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (confirmAction?.transaction) {
+                  setConfirmAction({ type: 'delete-all', transaction: confirmAction.transaction });
+                }
+              }}
+            >
+              Todas as parcelas
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={confirmAction?.type === 'delete-all'}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tem certeza?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`Isso vai excluir todas as ${
+                confirmAction?.transaction?.installmentGroupId
+                  ? installmentGroups.get(confirmAction.transaction.installmentGroupId)?.count || 0
+                  : 0
+              } parcelas de "${confirmAction?.transaction?.description}". Essa ação não pode ser desfeita.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (confirmAction?.transaction?.installmentGroupId) {
+                  onDeleteGroup?.(confirmAction.transaction.installmentGroupId);
+                }
+                setConfirmAction(null);
+              }}
+            >
+              Excluir todas
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={confirmAction?.type === 'dilute'}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Diluir parcela</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`A parcela ${diluteTx?.installmentIndex}/${diluteTx?.installmentsTotal} (${formatCurrency(diluteTx?.amount || 0)}) será removida e seu valor dividido entre as ${diluteRemaining.length} parcelas pendentes seguintes — cada uma passa a somar aproximadamente +${formatCurrency(diluteShare)}. Essa ação não pode ser desfeita.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (diluteTx) {
+                  onDilute?.(diluteTx.id);
+                }
+                setConfirmAction(null);
+              }}
+            >
+              Diluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Dialog open={!!selectedGroupId} onOpenChange={(open) => !open && setSelectedGroupId(null)}>
         <DialogContent className="sm:max-w-[500px] max-h-[80vh] flex flex-col">
           <DialogHeader>
@@ -475,6 +675,12 @@ export function TransactionList({
                     <p className="text-xs text-muted-foreground capitalize">
                       {getMonthDisplayName(tx.competenceMonth)}
                     </p>
+                    {tx.absorbedInstallments && tx.absorbedInstallments.length > 0 && (
+                      <p className="text-[10px] text-amber-500">
+                        Inclui parcela{tx.absorbedInstallments.length > 1 ? 's' : ''}{' '}
+                        {tx.absorbedInstallments.join(', ')} diluída{tx.absorbedInstallments.length > 1 ? 's' : ''}
+                      </p>
+                    )}
                   </div>
 
                   <div className="text-right space-y-1">
@@ -499,8 +705,16 @@ export function TransactionList({
           </div>
 
           <div className="pt-4 border-t mt-4 flex justify-between items-center">
-            <div className="text-xs text-muted-foreground">
-              Total da compra: <span className="font-mono font-medium text-foreground">{formatCurrency((groupTransactions[0]?.amount || 0) * (groupTransactions[0]?.installmentsTotal || 0))}</span>
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>
+                Total da compra: <span className="font-mono font-medium text-foreground">{formatCurrency((groupTransactions[0]?.amount || 0) * (groupTransactions[0]?.installmentsTotal || 0))}</span>
+              </div>
+              <div>
+                Total pago: <span className="font-mono font-medium text-foreground">
+                  {formatCurrency(groupTransactions.filter(tx => tx.status === 'paid').reduce((sum, tx) => sum + tx.amount, 0))}
+                </span>{' '}
+                ({groupTransactions.filter(tx => tx.status === 'paid').length}/{groupTransactions.length} parcelas)
+              </div>
             </div>
             <Button variant="outline" size="sm" onClick={() => setSelectedGroupId(null)}>
               Fechar

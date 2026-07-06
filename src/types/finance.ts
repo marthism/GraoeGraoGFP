@@ -32,6 +32,7 @@ export interface Transaction {
   installmentIndex?: number;
   installmentsTotal?: number;
   installmentGroupId?: string; // ID interno para agrupar parcelas
+  absorbedInstallments?: number[]; // Números de parcelas diluídas (mescladas) nesta
   parentId?: string; // ID da transação original em caso de parcelamento
   createdAt: string;
   updatedAt: string;
